@@ -63,3 +63,29 @@ def wyswietl_mape(mapa, cmap=None):
     plt.imshow(mapa, cmap=cmap)
     plt.axis('off')
     plt.show()
+
+# =========================================================
+# NOWA FUNKCJA DO PROJEKTU (POSZUKIWANIE DINOZAURÓW)
+# =========================================================
+def znajdz_podobne_skaly(obraz_pca_3d, wzorzec_wektor, prog_tolerancji=15.0):
+    """
+    Skanuje zredukowaną mapę PCA w poszukiwaniu pikseli podobnych do wzorca.
+    Używa algebry liniowej (normy wektora / odległości Euklidesowej).
+    """
+    print(f"-> Skanowanie terenu... Szukam skał o sygnaturze: {wzorzec_wektor}")
+    
+    # Obliczamy różnicę między każdym pikselem na mapie a naszym wektorem (P - W)
+    roznica = obraz_pca_3d - wzorzec_wektor
+    
+    # Obliczamy Odległość Euklidesową (D) dla całej macierzy naraz (Norma L2)
+    # axis=2 oznacza, że liczymy dystans wzdłuż trzeciego wymiaru (naszych 3 składowych PC)
+    odleglosc = np.linalg.norm(roznica, axis=2)
+    
+    # Tworzymy pustą czarną mapę
+    mapa_wynikowa = np.zeros(odleglosc.shape, dtype=np.uint8)
+    
+    # Jeśli odległość Euklidesowa jest mniejsza niż próg tolerancji,
+    # kolorujemy ten piksel na biało (255) - to jest nasz "cel"
+    mapa_wynikowa[odleglosc < prog_tolerancji] = 255
+    
+    return mapa_wynikowa
