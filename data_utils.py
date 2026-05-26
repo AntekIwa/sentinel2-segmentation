@@ -89,3 +89,25 @@ def znajdz_podobne_skaly(obraz_pca_3d, wzorzec_wektor, prog_tolerancji=15.0):
     mapa_wynikowa[odleglosc < prog_tolerancji] = 255
     
     return mapa_wynikowa
+def kat_widmowy(obraz_pca_3d, wzorzec_wektor):
+    """
+    Oblicza Kąt Widmowy (SAM - Spectral Angle Mapper) między każdym pikselem a wzorcem.
+    Wersja z zabezpieczeniem przed dzieleniem przez zero.
+    """
+    import numpy as np
+    wymiary = obraz_pca_3d.shape
+    tabela_2d = obraz_pca_3d.reshape(wymiary[0] * wymiary[1], wymiary[2])
+    
+    iloczyn_skalarny = np.dot(tabela_2d, wzorzec_wektor)
+    norma_mapy = np.linalg.norm(tabela_2d, axis=1)
+    norma_wzorca = np.linalg.norm(wzorzec_wektor)
+    
+    # Pancerne zabezpieczenie przed dzieleniem przez zero
+    norma_mapy[norma_mapy == 0] = 1e-9
+    if norma_wzorca == 0: norma_wzorca = 1e-9
+        
+    cos_theta = iloczyn_skalarny / (norma_mapy * norma_wzorca)
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+    katy_radiany = np.arccos(cos_theta)
+    
+    return katy_radiany.reshape(wymiary[0], wymiary[1])
