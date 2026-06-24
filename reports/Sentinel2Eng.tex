@@ -1,0 +1,758 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codekw}{RGB}{0,70,160}
+\definecolor{codecomment}{RGB}{90,120,90}
+\definecolor{codestring}{RGB}{150,70,0}
+\definecolor{codenumber}{RGB}{110,110,110}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=blue
+}
+
+\newcommand{\kodref}[2]{\hyperref[#1]{\textcolor{blue}{#2}}}
+\renewcommand{\lstlistingname}{Listing}
+\renewcommand{\lstlistlistingname}{List of Listings}
+
+\lstdefinestyle{pythoncode}{
+    language=Python,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    keywordstyle=\bfseries\color{codekw},
+    commentstyle=\itshape\color{codecomment},
+    stringstyle=\color{codestring},
+    numbers=left,
+    numberstyle=\tiny\color{codenumber},
+    stepnumber=1,
+    numbersep=8pt,
+    frame=single,
+    rulecolor=\color{black!35},
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+    keepspaces=true,
+    literate={ą}{{\k{a}}}1 {Ą}{{\k{A}}}1 {ć}{{\'c}}1 {Ć}{{\'C}}1 {ę}{{\k{e}}}1 {Ę}{{\k{E}}}1 {ł}{{\l{}}}1 {Ł}{{\L{}}}1 {ń}{{\'n}}1 {Ń}{{\'N}}1 {ó}{{\'o}}1 {Ó}{{\'O}}1 {ś}{{\'s}}1 {Ś}{{\'S}}1 {ż}{{\.z}}1 {Ż}{{\.Z}}1 {ź}{{\'z}}1 {Ź}{{\'Z}}1
+}
+\lstset{style=pythoncode}
+
+\geometry{margin=2.5cm}
+
+\graphicspath{{figures/}{../outputs/almeria/}{./}}
+
+\title{
+    Unsupervised Segmentation of Sentinel-2 Satellite Images\\
+    Using PCA, Spectral Angle Mapper, and K-Means
+}
+
+\author{
+    Antoni Iwanowski \and
+    Piotr Filipkowski \and
+    Igor Czaplicki
+}
+
+\date{}
+
+\begin{document}
+
+    \maketitle
+
+    \begin{abstract}
+       This paper presents a simple method for analyzing Sentinel-2 satellite images without pre-existing labels. Its goal was to segment the image into the main types of areas visible in the scene. A terrain fragment near Almeria was analyzed. Ten spectral bands were utilized and resampled to a common spatial resolution. Subsequently, Principal Component Analysis (PCA), Spectral Angle Mapper (SAM), and K-Means clustering were applied. Several sets of input data were compared: raw Sentinel-2 bands, PCA components, PCA components excluding the first component, and a model extended with NDVI, NDWI, and NDBI indices. The results indicate that reducing the number of features can improve the clarity of the feature set and shorten computation times. Simultaneously, completely removing brightness information can lead to the erroneous merging of objects with similar spectral shapes but different reflectance levels. The best compromise was achieved using an approach combining PCA with the SAM spectral similarity map.
+    \end{abstract}
+
+    \section{Introduction}
+
+    Satellite images are an essential source of information about the Earth's surface. They enable the analysis of urban, agricultural, water, mountainous, and industrial areas. Unlike standard RGB images, satellite data display the terrain across multiple radiation ranges, not just in colors visible to humans. This allows for the detection of differences between objects that might look nearly identical in a regular color image.
+
+    In this project, Sentinel-2 data for the Almeria region were used. The primary objective was to verify whether combining a few relatively simple data analysis methods could yield a useful segmentation of a satellite image without relying on manually prepared labels. This means an unsupervised approach was applied, where the algorithm independently searches for groups of similar pixels.
+
+    Three main methods were employed in the study. The first was PCA, a dimensionality reduction technique that preserves the most critical information from the spectral bands \cite{malahat2024pca,deafricaPCA2021,kaluzna2020pca}. The second was the Spectral Angle Mapper (SAM) method, which compares pixels based on the angle between their feature vectors. The third method was the K-Means algorithm, which partitioned the pixels into groups representing similar surfaces.
+
+    A multispectral image can be represented as a matrix of numbers, where each row corresponds to a single pixel and each column corresponds to a satellite band. PCA, SAM, and K-Means operate on such vectors and matrices: they change coordinate systems, calculate dot products, norms, angles, and distances. Because of this, satellite image analysis can be conducted as an analysis of points in a multidimensional feature space \cite{blum2020foundations,nag2019filters}.
+
+    \section{Linear Algebra in Multispectral Data Analysis}
+    \label{sec:algebra}
+
+    Sentinel-2 data can be treated as a matrix where the rows are pixels and the columns are the values of successive spectral bands. This representation allows for the application of methods based on vectors, projections, and matrix decompositions \cite{blum2020foundations}. The Sentinel-2 data can be written as a matrix:
+    \[
+    X =
+    \begin{bmatrix}
+    x_{11} & x_{12} & \cdots & x_{1,10}\\
+    x_{21} & x_{22} & \cdots & x_{2,10}\\
+    \vdots & \vdots & \ddots & \vdots\\
+    x_{N1} & x_{N2} & \cdots & x_{N,10}
+    \end{bmatrix},
+    \]
+    where one row is the feature vector of a single pixel, and the columns correspond to successive spectral bands. This means that instead of merely analyzing the image as a set of colors, we analyze millions of points in a ten-dimensional space.
+
+    The first crucial step is data standardization. It involves subtracting the mean and dividing by the standard deviation in each column of the matrix. This ensures that bands with larger numerical values do not automatically dominate the others. Next, PCA determines new coordinate axes. These axes are chosen such that the first component describes the greatest variance in the data, the second describes the next greatest variance, and so on. In practice, this means transitioning from the original Sentinel-2 bands to a new feature system: PC1, PC2, PC3, etc.
+
+    In the SAM method, linear algebra appears directly in the formula for the angle between vectors. To calculate it, the dot product and vector norms are required. This allows us to compare not only the brightness of pixels but also the shape of their spectral response. In the K-Means algorithm, each pixel is a point in the feature space, and the algorithm repeatedly calculates distances between pixels and group centroids. The entire project thus demonstrates that linear algebra concepts—such as matrices, vectors, norms, dot products, projections, and change of basis—have direct applications in the analysis of real image data.
+
+    \section{Input Data}
+\label{sec:dane}
+
+    The input data originated from the Sentinel-2 satellite, an Earth observation program utilized for monitoring vegetation, water, agricultural lands, and urban areas \cite{elhag2016lulc,xi2021sentinel,mabula2023bathymetry}. Ten spectral bands were used in the project:
+    \begin{itemize}
+       \item 10 m resolution bands: B02, B03, B04, B08,
+       \item 20 m resolution bands: B05, B06, B07, B8A, B11, B12.
+    \end{itemize}
+
+    Since the individual bands had different spatial resolutions, the 20-meter bands were resampled to a 10 m resolution. This allowed a single feature vector composed of ten spectral values to be created for each pixel. The dataset can be expressed as a matrix:
+
+    \[
+    X \in \mathbb{R}^{N \times 10},
+    \]
+
+    where $N$ denotes the number of pixels and $10$ is the number of analyzed bands. This notation is important because it allows the image to be treated as a set of vectors. Each pixel is a point in a ten-dimensional space, and the similarity of pixels can be examined using distances, angles, and projections. This is precisely why linear algebra methods are a natural tool for analyzing such data.
+
+    For an initial assessment of the study area, an RGB composite was prepared from the Sentinel-2 bands. This image allows for visual interpretation of the scene but does not utilize all the spectral information available in the data.
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=0.9\linewidth]{RGB_Sentinel_almeria.png}
+       \caption{RGB composite of the study area based on Sentinel-2 data.}
+       \label{fig:rgb}
+    \end{figure}
+
+    The RGB composite reveals a contrast typical for the Almeria region: heavily modified agricultural zones, dry terrain, and marine areas. The most characteristic elements of the scene are the very bright, rectangular objects in the central and northeastern parts of the image, primarily corresponding to greenhouses and agricultural infrastructure. The dark area at the bottom of the scene corresponds to the sea, while the left and central parts of the image contain dense urban structures and a transportation network. Such visual interpretation serves as a reference point for later segmentation results.
+
+    The code snippet responsible for loading the bands, harmonizing their spatial resolution, and preparing the RGB composite is provided in the appendix as \kodref{lst:data-rgb}{Listing~\ref*{lst:data-rgb}}.
+
+    \section{Dimensionality Reduction Using PCA}
+\label{sec:pca}
+
+    The first stage of analysis was dimensionality reduction using Principal Component Analysis (PCA). This method allows the original, partially correlated spectral bands to be replaced with new variables that describe the most significant directions of data variance.
+
+    The project utilized Singular Value Decomposition (SVD), which is one of the fundamental linear algebra methods used for PCA. Similar applications of PCA to Sentinel-2 data are described in the literature that inspired this project \cite{malahat2024pca,deafricaPCA2021,kaluzna2020pca,dianati2025ssri}:
+
+    \[
+    X = U \Sigma V^T.
+    \]
+
+    In practice, this means determining new coordinate axes where the first components contain the largest share of information about the image's variability. The first component, denoted as PC1, usually describes the dominant brightness change of the scene. Subsequent components may contain information more related to material or structural differences, such as the presence of vegetation, water, soil, or built-up areas.
+
+    Pixels containing no data were excluded during calculations so they would not distort the analysis results. This is crucial, as background values or missing data could be interpreted by the algorithm as a significant structural part of the image.
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{PC1-3_almeria_podglad.png}
+       \caption{The first three PCA components. PC1 primarily describes the overall brightness of the scene, while PC2 and PC3 contain additional information regarding the spectral diversity of the area.}
+       \label{fig:pca123}
+    \end{figure}
+
+    The visualization of PC1--PC3 confirms that the first component is dominated by the overall surface brightness: the sea and shadows are dark, while greenhouses and bright dry surfaces are highly illuminated. PC2 and PC3 do not merely repeat the scene's brightness; rather, they enhance differences between built-up areas, fields, dry soil, and areas with different spectral profiles. Therefore, further analysis should not rely exclusively on PC1.
+
+    The code calculating the PCA transformation via SVD and generating the PC1--PC3 maps is presented as \kodref{lst:pca}{Listing~\ref*{lst:pca}}.
+
+    \section{Variance Analysis and False Color Composition}
+\label{sec:wariancja}
+
+    After calculating the PCA components, the proportion of variance explained by subsequent components was analyzed. This analysis helps assess how much information is contained in each of the new variables. If the first few components explain the majority of the data variance, further processing can be limited to a smaller number of features.
+
+    A false color composite was also created, where the image channels do not correspond directly to red, green, and blue bands, but rather to the PCA components. This visualization method more clearly highlights certain spatial and spectral structures present in the data.
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{PC1-3_almeria_wykres_falsecolor.png}
+       \caption{The proportion of variance explained by successive PCA components and a false color composite created from PC1, PC2, and PC3.}
+       \label{fig:falsecolor}
+    \end{figure}
+
+    The scree plot demonstrates a very strong dominance of the first component: PC1 explains about 88.71\% of the variance, PC2 about 6.99\%, and PC3 about 4.30\%. This means that the first three components cover virtually all the data variance, but simultaneously, the majority of this variance is related to brightness. The false color composite reveals the layout of greenhouses, the city, linear infrastructure, and dry terrains more clearly than single bands, as it combines the dominant brightness contrast with more subtle spectral differences.
+
+    The calculation of the variance proportion and the PCA false color composite corresponds to \kodref{lst:variance-falsecolor}{Listing~\ref*{lst:variance-falsecolor}}.
+
+    \section{Interpretation of Principal Components}
+\label{sec:ladunki}
+
+    To better understand the meaning of the PCA components, their loadings were analyzed. PCA loadings show the extent to which individual Sentinel-2 bands influence a given principal component. This allows us to assess whether a given component primarily describes brightness, variations in vegetation, moisture content, or other surface properties.
+
+    The analysis showed that the first component, PC1, is strongly associated with the overall reflectance level, i.e., the brightness of the scene. This information can be useful, as different objects often vary in brightness. At the same time, it can introduce noise, for instance, when brightness stems from shadows, terrain slope, or illumination differences rather than the actual surface type.
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{PC1-4_alemria_wplyw.png}
+       \caption{PCA loading matrix showing the influence of individual Sentinel-2 bands on the principal components.}
+       \label{fig:loadings}
+    \end{figure}
+
+    The loading matrix explains the observations from the PCA figures. For PC1, all bands have similar positive weights, meaning this component is an averaged measure of brightness across the entire spectrum. PC2 contrasts visible bands with a portion of the short-wave infrared (SWIR) bands, which is why it can emphasize differences between dry, urban, and agricultural surfaces. PC3 and PC4 contain more selective contrasts between the red-edge, NIR, and SWIR channels, which is important for distinguishing vegetation, soil, moisture, and artificial objects.
+
+    The code snippet used to determine and visualize the PCA loadings can be found in \kodref{lst:loadings}{Listing~\ref*{lst:loadings}}.
+
+    \section{Analysis of the PCA Space After Omitting the First Component}
+\label{sec:bezpc1}
+
+    In the next stage, the effect of omitting the first component (PC1) was investigated. The goal of this experiment was to limit the dominant influence of brightness on further analysis. Instead of the PC1--PC3 space, the PC2--PC4 space was used.
+
+    This approach can facilitate the detection of spectral differences independent of the overall reflectance level. This is particularly important for satellite images, where shadows, terrain topology, and local lighting conditions can strongly affect pixel values.
+
+    However, it should be emphasized that omitting PC1 is not always beneficial. The first component also contains real information about surface properties. Its complete removal may therefore lead to the loss of some useful data, especially when differentiating objects with similar spectral shapes but different brightness.
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{PC1-4_almeria_porownanie1v4.png}
+       \caption{Comparison of the standard PCA space with the space after omitting PC1. Omitting the first component reduces the impact of brightness but may also remove some essential information.}
+       \label{fig:withoutpc1}
+    \end{figure}
+
+    Visual comparison shows that the PC2--PC4 space effectively weakens the dominance of bright greenhouses and shadows. After removing PC1, field boundaries, variations in urban structures, and transitions between dry ground and agricultural areas become more visible. At the same time, some objects that are unambiguously bright or dark in the RGB image lose their contrast, which makes the PC1-omitted variant good for material analysis, but not as the sole basis for segmentation.
+
+    The code creating the PC2--PC4 feature set, i.e., the variant after omitting PC1, is provided in \kodref{lst:pca-without-pc1}{Listing~\ref*{lst:pca-without-pc1}}.
+
+    \section{Spectral Similarity Analysis Using SAM}
+\label{sec:sam}
+
+    To assess pixel similarity, the Spectral Angle Mapper (SAM) method was used. SAM compares feature vectors based on the angle between them, rather than Euclidean distance. For two vectors $v$ and $r$, the spectral angle can be written as:
+
+    \[
+    \theta = \arccos \left( \frac{v \cdot r}{\|v\| \|r\|} \right).
+    \]
+
+    A small angle value means the two vectors have a similar shape, indicating a similar spectrum. A larger angle value indicates a greater spectral difference.
+
+    Two variants were compared in the project:
+    \begin{itemize}
+       \item SAM in the PC1--PC3 space,
+       \item SAM in the PC2--PC4 space, i.e., after omitting PC1.
+    \end{itemize}
+
+    A control point located in the center of the analyzed Almeria area was chosen as a reference. Its geographical coordinates were:
+
+    \[
+    \text{Lon} = -2.40601, \qquad \text{Lat} = 36.87168.
+    \]
+
+    For an image size of 2016 by 1253 pixels, this point corresponded to the position:
+
+    \[
+    \text{row} = 626, \qquad \text{col} = 1007.
+    \]
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{SAM_almeria.png}
+       \caption{Comparison of SAM angle maps for two PCA space variants.}
+       \label{fig:sam}
+    \end{figure}
+
+    The SAM map calculated in the PC1--PC3 space is strongly tied to overall brightness and reacts intensely to very bright greenhouses. The PC2--PC4 variant is more selective regarding the spectrum shape and less influenced by the reflection level. As a result, it serves better as an additional feature in the K-Means model because it introduces spectral similarity information that is independent of surface brightness itself.
+
+    The code computing the SAM spectral angle maps for both PCA space variants is located in \kodref{lst:sam}{Listing~\ref*{lst:sam}}.
+
+    \section{Segmentation Using K-Means}
+\label{sec:kmeans}
+
+    The actual image segmentation was performed using the K-Means algorithm. This is an unsupervised data clustering method that assigns each pixel to one of $K$ groups. Pixels belonging to the same group should be as similar to each other as possible in the chosen feature space.
+
+    The first segmentation variant was based on features PC2, PC3, PC4, and the SAM map. This was a model combining the dimensionality reduction information from PCA with spectral similarity information. The number of clusters was set to $K=4$.
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{kmeans_vs_rgb.png}
+       \caption{Comparison of the RGB image with the K-Means segmentation result for the model using PCA and SAM.}
+       \label{fig:kmeansrgb}
+    \end{figure}
+
+    Against the background of the RGB image, the segmentation shows that K-Means in the PCA+SAM space extracts broad classes corresponding to water, agricultural areas, urban structures, and dry terrains. The class boundaries do not perfectly match real objects because the algorithm does not use labels, but the cluster layout aligns with the main scene structures: the sea forms a cohesive area, greenhouse and field complexes are separated from mountainous terrains, and built-up areas exhibit a more fine-grained structure.
+
+    The K-Means segmentation code for the PCA+SAM model without PC1 is presented in \kodref{lst:kmeans-hybrid}{Listing~\ref*{lst:kmeans-hybrid}}.
+
+\section{Extended Model Preserving Brightness Information}
+\label{sec:model-rozszerzony}
+
+    A variant based solely on PC2--PC4 components limits the impact of brightness but may result in the loss of critical information. This problem is particularly noticeable when two types of objects share a similar spectral shape but differ in reflectance level. Examples include dark water areas and bright infrastructural objects, such as greenhouses.
+
+    For this reason, an extended model was prepared. This model utilized a more complete set of PCA features, encompassing components PC1--PC4, along with the SAM map calculated in the space without PC1. Such a solution preserves brightness information while concurrently leveraging more robust spectral similarity information.
+
+    In this variant, the number of clusters was increased to $K=5$.
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{kmeans_comp.png}
+       \caption{Comparison of the model without PC1 and the extended model, which reincorporates brightness information.}
+       \label{fig:kmeanscomp}
+    \end{figure}
+
+    Comparing the models indicates that re-including PC1 stabilizes the classification of objects that strongly differ in brightness. The variant without PC1 better exposes subtle spectral differences but may overly merge surfaces with similar spectral shapes. The extended model combines both types of information: it preserves the contrast of the sea, bright greenhouses, and dry surfaces, while simultaneously utilizing the SAM map to distinguish spectral similarity.
+
+    The code for the extended model, which combines PC1--PC4 with the SAM map, is found in \kodref{lst:kmeans-advanced}{Listing~\ref*{lst:kmeans-advanced}}.
+
+\section{Comparison with the Baseline Model}
+\label{sec:porownanie-baza}
+
+    To evaluate the proposed approach, a baseline model was prepared. This model performed K-Means clustering directly on the ten raw Sentinel-2 bands, without prior dimensionality reduction and without using the SAM map.
+
+    Two variants were compared:
+    \begin{itemize}
+       \item baseline model: K-Means on 10 raw bands,
+       \item hybrid model: K-Means on 5 features, i.e., PC1--PC4 and SAM.
+    \end{itemize}
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{kmeans_all_vs_select.png}
+       \caption{Comparison of the RGB image, the baseline model on raw bands, and the hybrid PCA + SAM model.}
+       \label{fig:ablation}
+    \end{figure}
+
+    The comparison indicates that the baseline model operating on raw bands is more susceptible to class fragmentation and the strong influence of bright surfaces. The hybrid model better preserves large spatial structures: the sea remains cohesive, greenhouse and field areas form clearer regions, and dry terrain is less chaotically mixed with built-up areas. This result confirms that PCA reduction and the addition of SAM not only reduce the dimensionality of the pixel description space but also organize the information used by K-Means.
+
+    The procedure for comparing the baseline model with the hybrid model is shown in \kodref{lst:ablation}{Listing~\ref*{lst:ablation}}.
+
+\section{Extending the Feature Set with Spectral Indices}
+\label{sec:indeksy}
+
+    The final experiment expanded the feature set with three spectral indices: NDVI, NDWI, and NDBI. Utilizing additional spectral indices alongside Sentinel-2 data is a common practice in remote sensing analysis because these indices facilitate the interpretation of vegetation, moisture, water, and modified surfaces \cite{xi2021sentinel,dianati2025ssri}. Unlike PCA components, which are derived based on calculations from a specific image, spectral indices have a direct physical interpretation. They are constructed as normalized differences in reflectance in selected Sentinel-2 bands, making their values less dependent on the absolute brightness of the scene than individual image channels.
+
+    The following indices were used in the analysis:
+    \begin{itemize}
+       \item \textbf{NDVI} (Normalized Difference Vegetation Index) -- vegetation index, calculated from the near-infrared band (B08) and the red band (B04);
+       \item \textbf{NDWI} (Normalized Difference Water Index) -- water index, calculated from the green band (B03) and near-infrared (B08);
+       \item \textbf{NDBI} (Normalized Difference Built-up Index) -- index for built-up or heavily modified surfaces, calculated from the short-wave infrared band (B11) and near-infrared (B08).
+    \end{itemize}
+
+    The indices were calculated according to the formulas:
+
+    \[
+    NDVI = \frac{B08 - B04}{B08 + B04},
+    \]
+
+    \[
+    NDWI = \frac{B03 - B08}{B03 + B08},
+    \]
+
+    \[
+    NDBI = \frac{B11 - B08}{B11 + B08}.
+    \]
+
+    In the implementation, a small constant $10^{-8}$ was added to the denominator to protect calculations against division by zero. The relevant code snippet is found in \kodref{lst:indices}{Listing~\ref*{lst:indices}}.
+
+    NDVI exploits the fact that healthy vegetation typically strongly reflects radiation in the near-infrared range while simultaneously absorbing red light associated with chlorophyll activity. High NDVI values thus indicate areas covered by vegetation or crops. Values close to zero are typical for soil, rocks, built-up areas, or mixed surfaces, whereas negative values may appear for water, shadows, or objects with very low reflectance in the NIR band.
+
+    NDWI highlights water bodies because water usually has relatively higher reflectance in the green band and low reflectance in the near-infrared. This index is helpful in separating water reservoirs from land areas. In dry scenes, such as the surroundings of Almeria, NDWI may also indicate moist surfaces, shadows, or areas with unusual spectral profiles, hence its interpretation should be combined with the RGB image, PCA, and segmentation results.
+
+    NDBI leverages the difference between the SWIR band (B11) and the NIR band (B08). Built-up areas, greenhouses, paved surfaces, and some dry grounds may exhibit elevated values for this index. However, NDBI is not an unambiguous detector of buildings, as similar spectral responses can also be produced by dry soils, rocks, exposed mineral surfaces, or agricultural infrastructure. In the analyzed area, this is especially important due to the presence of greenhouses and dry terrains.
+
+    For quality control purposes, separate diagnostic maps for NDVI, NDWI, and NDBI were prepared. They allow verification of whether the indices genuinely enhance the expected surface types before including them in the clustering process.
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{spectral_indices_diagnostic.png}
+       \caption{Diagnostic maps for NDVI, NDWI, and NDBI spectral indices. The visualization helps assess which areas of the scene are emphasized by individual indices before their use in the K-Means model.}
+       \label{fig:indicesdiagnostic}
+    \end{figure}
+
+    On the NDVI map, the highest values appear primarily along vegetation strips, fields, and local cultivated areas. Concurrently, large tracts of dry terrain and urban areas have low or near-zero values. The NDWI map very clearly separates the marine area from the land, while weaker responses on land can be interpreted as the influence of shadows, moister surfaces, or objects with low NIR reflectance. The NDBI map enhances parts of urban, greenhouse, dry, and mineral areas, thus its interpretation requires caution: a high value does not automatically mean classic buildings, but rather a surface with a greater SWIR response relative to NIR.
+
+    The code generating the diagnostic index maps is also found in \kodref{lst:indices}{Listing~\ref*{lst:indices}}.
+
+    After calculating the indices, an extended feature space was created:
+
+    \[
+    [PC1, PC2, PC3, PC4, SAM, NDVI, NDWI, NDBI].
+    \]
+
+    For the analyzed image, the feature matrix had the size:
+
+    \[
+    2526048 \times 8.
+    \]
+
+    The 8D model was compared with the earlier 5D model, which utilized only the $PC1$--$PC4$ features and the SAM map. Adding indices does not alter the clustering algorithm itself but changes the geometry of the pixel description space: pixels similar in terms of vegetation, moisture, or built-up characteristics can be moved closer together, even if they did not form a distinct cluster in the PCA components alone.
+
+    \begin{figure}[H]
+       \centering
+       \includegraphics[width=\linewidth]{kmeans_plus.png}
+       \caption{Comparison of the 5D model and the 8D model extended with NDVI, NDWI, and NDBI indices.}
+       \label{fig:kmeansplus}
+    \end{figure}
+
+    The 8D model's result demonstrates that spectral indices significantly alter clustering priorities. Compared to the 5D model, areas associated with vegetation, water, and modified surfaces are more strongly distinguished. At the same time, there is greater fragmentation in some urban and dry fragments because NDVI, NDWI, and NDBI introduce additional separation axes. This means the 8D model is easier to explain thematically, though it may not automatically be the most spatially homogeneous.
+
+    The code calculating the spectral indices, building the 8D space, and generating the segmentation comparison is in \kodref{lst:indices}{Listing~\ref*{lst:indices}}.
+
+    Extending the feature set with spectral indices improves the explainability of results because NDVI, NDWI, and NDBI relate to specific surface properties. This does not, however, mean an automatic improvement in segmentation across all classes. In unsupervised analysis, additional features affect the position of cluster centroids and may improve the separation of some classes while deteriorating the separation of others. In the analyzed case, the indices are particularly useful as an interpretative layer: they help explain why certain pixels were grouped together and indicate which areas correspond to vegetation, water, or built-up and modified surfaces.
+
+\section{Analysis of the Obtained Results}
+\label{sec:analiza-wynikow}
+
+    The conducted experiments show that appropriate feature set selection has a profound impact on the satellite image segmentation result. Segmentation performed directly on raw Sentinel-2 bands serves as a simple baseline, but it is not always the most advantageous. Raw bands contain a large amount of information, but some of this information may be redundant since individual channels are correlated.
+
+    The application of PCA allowed for the reduction of features and organized the information contained within the data. This made it possible to represent the image in fewer dimensions while preserving the most important spectral changes. The results indicate that PCA is a useful preprocessing step for satellite images, particularly when subsequent analysis is to be performed using unsupervised methods.
+
+    The experiment omitting the first PC1 component showcased both the advantages and limitations of such an approach. On one hand, reducing the impact of brightness can increase the significance of spectral differences not directly tied to illumination. On the other hand, PC1 also holds real information about the analyzed surface. Its complete rejection can therefore lead to errors, especially for objects that differ in reflection levels.
+
+    The most favorable approach proved to be the hybrid one, in which PCA components were combined with the SAM map. Such a feature set accounts for the overall data structure as well as the similarity in spectral shape. Consequently, the model does not rely exclusively on absolute band values but also considers the relationships between them.
+
+    Comparison with the baseline model suggests that dimensionality reduction may also have practical importance since K-Means operates in a space with fewer dimensions. In this paper, the main conclusion from the comparison pertains to the quality and clarity of segmentation, rather than an exact measurement of execution time.
+
+    Adding the NDVI, NDWI, and NDBI spectral indices enhanced the explainability of the model's results because these indices refer to specific surface types. This does not imply, however, that a larger number of features always leads to better segmentation. In unsupervised analysis, extra features can alter the cluster layout in a way that is beneficial for some object classes but less so for others. Feature selection should therefore depend on the goal of the analysis, for example, whether identifying vegetation, water, or buildings is more important, or simply obtaining a general division of the scene into homogeneous areas.
+
+    \section{Conclusions}
+\label{sec:wnioski}
+
+    Based on the conducted experiments, it can be concluded that the combination of PCA, SAM, and K-Means represents a useful approach for the preliminary, unsupervised segmentation of Sentinel-2 images. The method does not require manually prepared labels, so it can be applied in situations where training data is lacking.
+
+    PCA analysis allowed for reducing the number of features and extracting the main directions of spectral variance. At the same time, it was shown that the first component, PC1, despite its strong correlation with brightness, should not be automatically discarded as it may hold essential surface type information. The best compromise was attained in the hybrid model, which merged the PC1--PC4 components with the SAM spectral similarity map.
+
+    The comparison with the baseline model demonstrated that using a reduced feature set organizes the input space for K-Means and yields a more decipherable segmentation result than clustering raw bands directly. The performance aspect can be viewed as a potential benefit of dimensionality reduction, but it was not the primary focus of this analysis. Incorporating NDVI, NDWI, and NDBI indices can be beneficial when the goal is to better distinguish vegetation, water, or built-up areas; however, the impact of these indices depends on the nature of the studied scene.
+
+    Ultimately, the proposed approach is a solid example of the practical application of simple data analysis methods to satellite image processing. It can serve as a starting point for further research, such as comparisons with other clustering methods, the application of supervised classification, or utilizing data from other geographical regions.
+
+
+
+\section{Bibliography}
+\label{sec:bibliografia}
+
+The following references encompass the primary materials used during the development of the method. They include examples of using PCA, Sentinel-2, spectral indices, and methods for classifying and analyzing satellite data. General sources demonstrating the applications of linear algebra in data analysis, image processing, graphs, and cryptography have also been included.
+
+\begin{thebibliography}{9}
+
+\bibitem{malahat2024pca}
+I. Malahat, \textit{Principal Component Analysis of Sentinel-2 Multispectral Images}, Medium, 2024. Available online: \url{https://itbamalahat.medium.com/principal-component-analysis-of-sentinel-2-multispectral-images-241a7862055e}.
+
+\bibitem{deafricaPCA2021}
+Digital Earth Africa, \textit{Principal component analysis for multi-spectral data}, documentation notebook, 2021. Available online: \url{https://docs.digitalearthafrica.org/en/latest/sandbox/notebooks/Frequently_used_code/Principal_component_analysis.html}.
+
+\bibitem{kaluzna2020pca}
+U. Kałużna, K. Będkowski, Klasyfikacja pokrycia terenu z wykorzystaniem obrazów Sentinel-2A przetworzonych za pomocą metody głównych składowych (PCA), \textit{Teledetekcja Środowiska}, vol. 61, 2020, pp. 19--37. Available online: \url{https://teledetekcja.pw.edu.pl/wp-content/uploads/2021/01/TD%C5%9A_61_KALUZNABEDKOWSKIa.pdf}.
+
+\bibitem{dianati2025ssri}
+A. Dianati, M. H. Rasouli-Sadaghiani, F. Asadzadeh, E. Sepehr, K. Khosravi Aqdam, \textit{A PCA-based standardized spectral index from Sentinel-2 for modeling soil macronutrients in the Miandoab region, Iran}, Scientific Reports, 15, article 41023, 2025. Available online: \url{https://www.nature.com/articles/s41598-025-25034-z}.
+
+\bibitem{elhag2016lulc}
+M. Elhag, S. Boteva, Mediterranean Land Use and Land Cover Classification Assessment Using High Spatial Resolution Data, \textit{IOP Conference Series: Earth and Environmental Science}, 44, 042032, 2016. DOI: \url{https://doi.org/10.1088/1755-1315/44/4/042032}.
+
+\bibitem{xi2021sentinel}
+Y. Xi, C. Ren, Q. Tian, Y. Ren, X. Dong, Z. Zhang, Exploitation of Time Series Sentinel-2 Data and Different Machine Learning Algorithms for Detailed Tree Species Classification, \textit{IEEE Journal of Selected Topics in Applied Earth Observations and Remote Sensing}, 14, 2021, pp. 7589--7603. DOI: \url{https://doi.org/10.1109/JSTARS.2021.3098817}.
+
+\bibitem{mabula2023bathymetry}
+M. J. Mabula, D. Kisanga, S. Pamba, Application of machine learning algorithms and Sentinel-2 satellite for improved bathymetry retrieval in Lake Victoria, Tanzania, \textit{The Egyptian Journal of Remote Sensing and Space Sciences}, 26(3), 2023, pp. 619--627. DOI: \url{https://doi.org/10.1016/j.ejrs.2023.07.003}.
+
+
+\bibitem{blum2020foundations}
+A. Blum, J. Hopcroft, R. Kannan, \textit{Foundations of Data Science}. Available online: \url{https://www.cs.cornell.edu/jeh/book.pdf}.
+
+\bibitem{godsil2001algebraic}
+C. Godsil, G. Royle, \textit{Algebraic Graph Theory}, Springer, New York, 2001.
+
+\bibitem{hoffstein2014crypto}
+J. Hoffstein, J. Pipher, J. H. Silverman, \textit{An Introduction to Mathematical Cryptography}, Springer, 2014.
+
+\bibitem{nag2019filters}
+H. Nag, \textit{Applications of Linear Algebra in Image Filters, Part I: Operations}, Medium. Available online: \url{https://medium.com/swlh/applications-of-linear-algebra-in-image-filters-part-i-operations-aeb64f236845}.
+
+\end{thebibliography}
+
+\appendix
+\section{Computational Code Snippets}
+\label{app:kod}
+
+The appendix presents the key code snippets used in the project. Each cell corresponds to one stage of the workflow described in the article. Cross-references in the main text are clickable and link directly to the appropriate code block:
+
+\begin{itemize}
+    \item \hyperref[sec:dane]{Input data and RGB} $\rightarrow$ \kodref{lst:data-rgb}{Listing~\ref*{lst:data-rgb}},
+    \item \hyperref[sec:pca]{PCA} $\rightarrow$ \kodref{lst:pca}{Listing~\ref*{lst:pca}},
+    \item \hyperref[sec:wariancja]{Variance and false colors} $\rightarrow$ \kodref{lst:variance-falsecolor}{Listing~\ref*{lst:variance-falsecolor}},
+    \item \hyperref[sec:ladunki]{PCA loadings} $\rightarrow$ \kodref{lst:loadings}{Listing~\ref*{lst:loadings}},
+    \item \hyperref[sec:bezpc1]{PCA without PC1} $\rightarrow$ \kodref{lst:pca-without-pc1}{Listing~\ref*{lst:pca-without-pc1}},
+    \item \hyperref[sec:sam]{SAM} $\rightarrow$ \kodref{lst:sam}{Listing~\ref*{lst:sam}},
+    \item \hyperref[sec:kmeans]{K-Means PCA+SAM} $\rightarrow$ \kodref{lst:kmeans-hybrid}{Listing~\ref*{lst:kmeans-hybrid}},
+    \item \hyperref[sec:model-rozszerzony]{Extended model} $\rightarrow$ \kodref{lst:kmeans-advanced}{Listing~\ref*{lst:kmeans-advanced}},
+    \item \hyperref[sec:porownanie-baza]{Comparison with the baseline model} $\rightarrow$ \kodref{lst:ablation}{Listing~\ref*{lst:ablation}},
+    \item \hyperref[sec:indeksy]{NDVI, NDWI and NDBI} $\rightarrow$ \kodref{lst:indices}{Listing~\ref*{lst:indices}}.
+\end{itemize}
+
+\begin{lstlisting}[caption={Loading Sentinel-2 bands and preparing the RGB image.},label={lst:data-rgb}]
+BANDS_10M = ["B02", "B03", "B04", "B08"]
+BANDS_20M = ["B05", "B06", "B07", "B8A", "B11", "B12"]
+
+def prepare_observation_tensor(paths_10, paths_20):
+    bands = []
+    with rasterio.open(paths_10[0]) as src:
+        h, w = src.height, src.width
+        source_crs = src.crs
+
+    for s in paths_10:
+        with rasterio.open(s) as src:
+            bands.append(src.read(1))
+
+    for s in paths_20:
+        with rasterio.open(s) as src:
+            bands.append(src.read(1, out_shape=(h, w),
+                                  resampling=Resampling.bilinear))
+
+    matrix_3d = np.dstack(bands)
+    matrix_2d = matrix_3d.reshape(h * w, matrix_3d.shape[2])
+    return matrix_3d, matrix_2d, (h, w), source_crs
+
+def radiometric_normalization_rgb(matrix_3d):
+    rgb_out = np.zeros((matrix_3d.shape[0], matrix_3d.shape[1], 3),
+                       dtype=np.float32)
+    rgb_indices = [2, 1, 0]
+    for i, idx in enumerate(rgb_indices):
+        channel = matrix_3d[:, :, idx].astype(np.float32)
+        mask = channel > 0
+        p_min, p_max = np.percentile(channel[mask], (2, 98))
+        norm_channel = (channel - p_min) / (p_max - p_min + 1e-8)
+        rgb_out[:, :, i] = np.clip(norm_channel, 0, 1)
+    return rgb_out
+
+m_3d, m_2d, mat_shape, base_crs = prepare_observation_tensor(
+    paths_10m, paths_20m)
+rgb = radiometric_normalization_rgb(m_3d)
+plt.imsave("RGB_Sentinel_almeria.png", rgb)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Calculating PCA using the SVD method.},label={lst:pca}]
+def power_iteration_svd(X, dim=3, iter_max=100):
+    C = np.dot(X.T, X)
+    features = X.shape[1]
+    v_vectors, sigma_values = [], []
+    C_working = C.copy()
+
+    for k in range(dim):
+        v = np.random.rand(features)
+        v /= np.linalg.norm(v)
+        for _ in range(iter_max):
+            v_n = np.dot(C_working, v)
+            norm = np.linalg.norm(v_n)
+            if norm < 1e-9:
+                break
+            v = v_n / norm
+        lam = np.dot(v.T, np.dot(C_working, v))
+        sig = np.sqrt(lam)
+        v_vectors.append(v)
+        sigma_values.append(sig)
+        C_working -= lam * np.outer(v, v)
+    return np.array(sigma_values), np.array(v_vectors).T
+
+def robust_pca_transformation(data_2d, shape_3d, dim=3):
+    activity_mask = np.sum(data_2d, axis=1) > 0
+    physical_data = data_2d[activity_mask]
+    mu = np.mean(physical_data, axis=0)
+    std = np.std(physical_data, axis=0)
+    X_std = (physical_data - mu) / (std + 1e-8)
+    Sigma, Vt = power_iteration_svd(X_std, dim=dim)
+    pca_active = np.dot(X_std, Vt)
+    pca_complete = np.zeros((data_2d.shape[0], dim))
+    pca_complete[activity_mask] = pca_active
+    return pca_complete.reshape(shape_3d[0], shape_3d[1], -1), Sigma, activity_mask
+
+pca_3d, sigma_vector, bg_mask = robust_pca_transformation(
+    m_2d, mat_shape, dim=3)
+pca_2d = pca_3d.reshape(mat_shape[0] * mat_shape[1], -1)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Variance plot and false color composite.},label={lst:variance-falsecolor}]
+def eigen_distribution_statistics(singular_vector):
+    variances = singular_vector ** 2
+    return (variances / np.sum(variances)) * 100
+
+def scale_pc_channel(channel, p_min=2, p_max=98):
+    mask = channel != 0
+    val_min, val_max = np.percentile(channel[mask], (p_min, p_max))
+    channel_out = (channel - val_min) / (val_max - val_min + 1e-8)
+    return np.clip(channel_out, 0, 1)
+
+variance_percentages = eigen_distribution_statistics(sigma_vector)
+pca_rgb = np.dstack((
+    scale_pc_channel(pca_3d[:, :, 0]),
+    scale_pc_channel(pca_3d[:, :, 1]),
+    scale_pc_channel(pca_3d[:, :, 2])
+))
+plt.imsave("PC1-3_almeria_wykres_falsecolor.png", pca_rgb)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Calculation of PCA loadings.},label={lst:loadings}]
+def extract_pca_loadings(data_2d, mask, dim=4):
+    active_data = data_2d[mask]
+    mu = np.mean(active_data, axis=0)
+    std = np.std(active_data, axis=0)
+    X_std = (active_data - mu) / (std + 1e-8)
+    Sigma, Vt = power_iteration_svd(X_std, dim=dim)
+    return Vt
+
+pca_loadings = extract_pca_loadings(m_2d, bg_mask, dim=4)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Utilizing PCA components without PC1.},label={lst:pca-without-pc1}]
+pca_4d_3d, sigma_vector_4d, bg_mask_4d = robust_pca_transformation(
+    m_2d, mat_shape, dim=4)
+
+pca_without_albedo = np.dstack((
+    scale_pc_channel(pca_4d_3d[:, :, 1]),
+    scale_pc_channel(pca_4d_3d[:, :, 2]),
+    scale_pc_channel(pca_4d_3d[:, :, 3])
+))
+
+pca_2d_without_pc1 = pca_4d_3d[:, :, 1:4].reshape(
+    mat_shape[0] * mat_shape[1], 3)
+plt.imsave("PC1-4_almeria_porownanie1v4.png", pca_without_albedo)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Computing the SAM map.},label={lst:sam}]
+def sam_transformation_engine(mat_3d, ref_vector):
+    h, w, c = mat_3d.shape
+    M = mat_3d.reshape(h * w, c)
+    ref = ref_vector.reshape(1, c)
+    numerator = np.sum(M * ref, axis=1)
+    denominator = np.linalg.norm(M, axis=1) * np.linalg.norm(ref)
+    cos_theta = numerator / (denominator + 1e-8)
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+    return np.arccos(cos_theta).reshape(h, w)
+
+OBJECT_NAME = list(ACTIVE_POINTS.keys())[0]
+COORDINATES = ACTIVE_POINTS[OBJECT_NAME]
+row, col = 626, 1007
+
+ref_vector_A = pca_3d[row, col, :]
+sam_map_variant_A = sam_transformation_engine(pca_3d, ref_vector_A)
+
+ref_vector_B = pca_4d_3d[row, col, 1:4]
+sam_map_variant_B = sam_transformation_engine(pca_4d_3d[:, :, 1:4], ref_vector_B)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={K-Means segmentation on PCA and SAM features without PC1.},label={lst:kmeans-hybrid}]
+def hybrid_clustering_ml(pca_matrix_2d, sam_matrix_2d, K=4):
+    sam_1d = sam_matrix_2d.flatten().reshape(-1, 1)
+    merged_features = np.hstack((pca_matrix_2d, sam_1d))
+    scaler = StandardScaler()
+    normalized_features = scaler.fit_transform(merged_features)
+    classifier = KMeans(n_clusters=K, random_state=42, n_init=10)
+    labels_1d = classifier.fit_predict(normalized_features)
+    return labels_1d.reshape(mat_shape)
+
+clusters_ml_2d = hybrid_clustering_ml(
+    pca_2d_without_pc1, sam_map_variant_B, K=4)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Extended model: PC1--PC4 and SAM.},label={lst:kmeans-advanced}]
+def advanced_hybrid_clustering(pca_4d_mat, sam_matrix_2d, K=6):
+    h, w, c = pca_4d_mat.shape
+    pca_flat = pca_4d_mat.reshape(h * w, c)
+    sam_1d = sam_matrix_2d.flatten().reshape(-1, 1)
+    merged_features = np.hstack((pca_flat, sam_1d))
+    scaler = StandardScaler()
+    normalized_features = scaler.fit_transform(merged_features)
+    classifier = KMeans(n_clusters=K, random_state=42, n_init=10)
+    labels_1d = classifier.fit_predict(normalized_features)
+    return labels_1d.reshape(h, w)
+
+advanced_clusters_2d = advanced_hybrid_clustering(
+    pca_4d_3d, sam_map_variant_B, K=6)
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Comparison of the baseline and hybrid models.},label={lst:ablation}]
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+import matplotlib.pyplot as plt
+
+raw_scaler = StandardScaler()
+m_2d_normalized = raw_scaler.fit_transform(m_2d)
+
+print("-> Training the naive model (10 dimensions)...")
+naive_kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
+naive_clusters_1d = naive_kmeans.fit_predict(m_2d_normalized)
+naive_clusters_2d = naive_clusters_1d.reshape(mat_shape)
+
+h, w, c = pca_4d_3d.shape
+pca_flat = pca_4d_3d.reshape(h * w, c)
+sam_1d = sam_map_variant_B.flatten().reshape(-1, 1)
+merged_features = np.hstack((pca_flat, sam_1d))
+
+advanced_scaler = StandardScaler()
+normalized_features = advanced_scaler.fit_transform(merged_features)
+
+print("-> Training the hybrid model (5 dimensions with albedo fusion)...")
+hybrid_kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
+hybrid_clusters_1d = hybrid_kmeans.fit_predict(normalized_features)
+advanced_clusters_2d = hybrid_clusters_1d.reshape(h, w)
+
+fig, ax = plt.subplots(1, 3, figsize=(24, 8))
+ax[0].imshow(rgb)
+ax[0].set_title("Optical Reference Image (R-G-B)")
+ax[0].axis('off')
+
+im_naive = ax[1].imshow(naive_clusters_2d, cmap='Set1')
+ax[1].set_title("Baseline Model (10 Raw Bands)")
+ax[1].axis('off')
+fig.colorbar(im_naive, ax=ax[1], fraction=0.046, pad=0.04,
+             label="Cluster Index")
+
+im_hybrid = ax[2].imshow(advanced_clusters_2d, cmap='Set1')
+ax[2].set_title("Optimized Model (PCA + SAM Angle Fusion)")
+ax[2].axis('off')
+fig.colorbar(im_hybrid, ax=ax[2], fraction=0.046, pad=0.04,
+             label="Cluster Index")
+
+plt.tight_layout()
+plt.savefig("kmeans_all_vs_select.png", bbox_inches='tight', dpi=300)
+plt.show()
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Calculating NDVI, NDWI, NDBI and 8D segmentation.},label={lst:indices}]
+b03 = m_3d[:, :, 1].astype(np.float32)
+b04 = m_3d[:, :, 2].astype(np.float32)
+b08 = m_3d[:, :, 3].astype(np.float32)
+b11 = m_3d[:, :, 8].astype(np.float32)
+
+ndvi = (b08 - b04) / (b08 + b04 + 1e-8)
+ndwi = (b03 - b08) / (b03 + b08 + 1e-8)
+ndbi = (b11 - b08) / (b11 + b08 + 1e-8)
+
+ndvi_1d = ndvi.flatten().reshape(-1, 1)
+ndwi_1d = ndwi.flatten().reshape(-1, 1)
+ndbi_1d = ndbi.flatten().reshape(-1, 1)
+
+h, w, c = pca_4d_3d.shape
+pca_flat = pca_4d_3d.reshape(h * w, c)
+sam_1d = sam_map_variant_B.flatten().reshape(-1, 1)
+super_features = np.hstack((pca_flat, sam_1d, ndvi_1d, ndwi_1d, ndbi_1d))
+X_super_normalized = StandardScaler().fit_transform(super_features)
+
+kmeans_8d = KMeans(n_clusters=6, random_state=42, n_init=10)
+clusters_8d_1d = kmeans_8d.fit_predict(X_super_normalized)
+clusters_8d_2d = clusters_8d_1d.reshape(h, w)
+
+fig_ind, ax_ind = plt.subplots(1, 3, figsize=(22, 6))
+ax_ind[0].imshow(ndvi, cmap='RdYlGn', vmin=-0.2, vmax=0.8)
+ax_ind[0].set_title("NDVI - Vegetation")
+ax_ind[1].imshow(ndwi, cmap='Blues', vmin=-0.3, vmax=0.5)
+ax_ind[1].set_title("NDWI - Water")
+ax_ind[2].imshow(ndbi, cmap='magma', vmin=-0.2, vmax=0.4)
+ax_ind[2].set_title("NDBI - Infrastructure")
+plt.savefig("spectral_indices_diagnostic.png", bbox_inches='tight', dpi=300)
+
+fig, ax = plt.subplots(1, 2, figsize=(20, 8))
+ax[0].imshow(advanced_clusters_2d, cmap='Set1')
+ax[0].set_title("5D Model (PCA + SAM)")
+ax[1].imshow(clusters_8d_2d, cmap='Set1')
+ax[1].set_title("8D Model (PCA + SAM + NDVI/NDWI/NDBI)")
+plt.savefig("kmeans_plus.png", bbox_inches='tight', dpi=300)
+\end{lstlisting}
+
+
+\end{document}
