@@ -65,7 +65,7 @@ The exploratory notebooks are in `notebooks/`. Start Jupyter from the repository
 jupyter lab
 ```
 
-The main LaTeX/PDF reports are stored in `reports/`. They use lightweight report figures from `reports/figures/`, with the full generated outputs kept in `outputs/almeria/`.
+The main LaTeX/PDF reports are stored in `reports/`. They use lightweight report figures from `reports/figures/pl/` and `reports/figures/en/`, with the full generated outputs kept in `outputs/almeria/`.
 
 ## Notes
 
