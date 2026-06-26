@@ -1,4 +1,4 @@
-# Sentinel-2 PCA Analysis
+# Sentinel-2 Segmentation
 
 This project explores unsupervised analysis of Sentinel-2 multispectral imagery with Principal Component Analysis (PCA), Spectral Angle Mapper (SAM), and K-Means clustering. It includes experiments for Almeria segmentation, the Sahara Eye, and burn scar detection on Evia, Greece.
 
